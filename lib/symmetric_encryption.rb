@@ -25,12 +25,12 @@ end
 
 # Add support for other libraries only if they have already been loaded
 require 'symmetric_encryption/railtie' if defined?(Rails)
-if defined?(ActiveRecord::Base) && !defined?(AttrEncrypted::Version)
-  require 'symmetric_encryption/extensions/active_record/base'
-end
+# if defined?(ActiveRecord::Base) && !defined?(AttrEncrypted::Version)
+#   require 'symmetric_encryption/extensions/active_record/base'
+# end
 require 'symmetric_encryption/railties/symmetric_encryption_validator' if defined?(ActiveModel)
-require 'symmetric_encryption/extensions/mongoid/encrypted' if defined?(Mongoid)
-if defined?(MongoMapper)
-  warn 'MongoMapper support is deprecated. Consider upgrading to Mongoid.'
-  require 'symmetric_encryption/extensions/mongo_mapper/plugins/encrypted_key'
-end
+# require 'symmetric_encryption/extensions/mongoid/encrypted' if defined?(Mongoid)
+# if defined?(MongoMapper)
+#   warn 'MongoMapper support is deprecated. Consider upgrading to Mongoid.'
+#   require 'symmetric_encryption/extensions/mongo_mapper/plugins/encrypted_key'
+# end
