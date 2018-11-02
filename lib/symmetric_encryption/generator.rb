@@ -8,24 +8,25 @@ module SymmetricEncryption
       compress  = options.delete(:compress) || false
       type      = options.delete(:type) || :string
 
-      raise(ArgumentError, "SymmetricEncryption Invalid options #{options.inspect} when encrypting '#{decrypted_name}'") if options.size > 0
+      raise(ArgumentError, "SymmetricEncryption Invalid options #{options.inspect} when encrypting '#{decrypted_name}'") unless options.empty?
       raise(ArgumentError, "Invalid type: #{type.inspect}. Valid types: #{SymmetricEncryption::COERCION_TYPES.inspect}") unless SymmetricEncryption::COERCION_TYPES.include?(type)
 
       if model.const_defined?(:EncryptedAttributes, _search_ancestors = false)
-        mod = model.const_get(:EncryptedAttributes)
+        mod                                                           = model.const_get(:EncryptedAttributes)
       else
         mod = model.const_set(:EncryptedAttributes, Module.new)
         model.send(:include, mod)
       end
 
       # Generate getter and setter methods
-      mod.module_eval(<<-EOS, __FILE__, __LINE__ + 1)
+      mod.module_eval(<<~ACCESSORS, __FILE__, __LINE__ + 1)
         # Set the un-encrypted field
         # Also updates the encrypted field with the encrypted value
         # Freeze the decrypted field value so that it is not modified directly
         def #{decrypted_name}=(value)
           v = SymmetricEncryption::Coerce.coerce(value, :#{type})
-          self.#{encrypted_name} = @stored_#{encrypted_name} = ::SymmetricEncryption.encrypt(v, #{random_iv}, #{compress}, :#{type})
+          return if (@#{decrypted_name} == v) && !v.nil? && !(v == '')
+          self.#{encrypted_name} = @stored_#{encrypted_name} = ::SymmetricEncryption.encrypt(v, random_iv: #{random_iv}, compress: #{compress}, type: :#{type})
           @#{decrypted_name} = v.freeze
         end
 
@@ -34,7 +35,7 @@ module SymmetricEncryption
         # If this method is not called, then the encrypted value is never decrypted
         def #{decrypted_name}
           if !defined?(@stored_#{encrypted_name}) || (@stored_#{encrypted_name} != self.#{encrypted_name})
-            @#{decrypted_name} = ::SymmetricEncryption.decrypt(self.#{encrypted_name}, nil, :#{type}).freeze
+            @#{decrypted_name} = ::SymmetricEncryption.decrypt(self.#{encrypted_name}, type: :#{type}).freeze
             @stored_#{encrypted_name} = self.#{encrypted_name}
           end
           @#{decrypted_name}
@@ -44,7 +45,7 @@ module SymmetricEncryption
         def #{decrypted_name}_changed?
           #{encrypted_name}_changed?
         end
-      EOS
+      ACCESSORS
     end
   end
 end

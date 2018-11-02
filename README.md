@@ -29,12 +29,77 @@ Checkout the sister project [Rocket Job](http://rocketjob.io): Ruby's missing ba
 
 Fully supports Symmetric Encryption to encrypt data in flight and at rest while running jobs in the background.
 
-## Supports
+## Upgrading to SymmetricEncryption V4
 
-Symmetric Encryption works with the following Ruby VMs:
+Version 4 of Symmetric Encryption has completely adopted the Ruby keyword arguments on most API's where
+multiple arguments are being passed, or where a Hash was being used before.
 
-- Ruby 2.1 and higher.
-- JRuby 9.1 and higher.
+The encrypt and decrypt API now require keyword arguments for any optional arguments.
+
+The following does _not_ change:
+
+~~~ruby
+encrypted = SymmetricEncryption.encrypt('Hello World')
+SymmetricEncryption.decrypt(encrypted)
+~~~
+
+The following is _not_ backward compatible:
+~~~ruby
+SymmetricEncryption.encrypt('Hello World', false, false, :date)
+~~~
+
+Needs to be changed to:
+~~~ruby
+SymmetricEncryption.encrypt('Hello World', random_iv: false, compress: false, type: :date)
+~~~
+
+Or, just to change the type:
+~~~ruby
+SymmetricEncryption.encrypt('Hello World', type: :date)
+~~~
+
+Similarly the `decrypt` api has also changed:
+~~~ruby
+SymmetricEncryption.decrypt(encrypted, 2, :date)
+~~~
+
+Needs to be changed to:
+~~~ruby
+SymmetricEncryption.decrypt(encrypted, version: 2, type: :string)
+~~~
+
+The Rake tasks have been replaced with a new command line interface for managing key configuration and generation. 
+For more info:
+~~~
+symmetric-encryption --help
+~~~
+
+#### Configuration changes
+
+In Symmetric Encryption V4 the configuration file is now modified directly instead
+of using templates. This change is necessary to allow the command line interface to
+generate new keys and automatically update the configuration file.
+ 
+Please backup your existing `symmetric-encryption.yml` prior to upgrading if it is not
+already in a version control system. This is critical for configurations that have custom
+code or for prior configurations targeting heroku.
+
+In Symmetric Encryption V4 the defaults for `encoding` and `always_add_header` have changed.
+If these values are not explicitly set in the `symmetric-encryption.yml` file, set them
+prior to upgrading.
+
+Prior defaults, set explicitly to these values if missing for all environments:
+~~~yaml
+      encoding:          :base64
+      always_add_header: false
+~~~
+
+New defaults are:
+~~~yaml
+      encoding:          :base64strict
+      always_add_header: true
+~~~
+
 
 ## Upgrading to SymmetricEncryption V3
 

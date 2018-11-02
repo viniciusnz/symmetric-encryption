@@ -8,7 +8,6 @@ require 'erb'
 # The symmetric key is protected using the private key below and must
 # be distributed separately from the application
 module SymmetricEncryption
-
   # Defaults
   @@cipher            = nil
   @@secondary_ciphers = []
@@ -26,7 +25,7 @@ module SymmetricEncryption
   #   :date      => Date
   #   :json      => Uses JSON serialization, useful for hashes and arrays
   #   :yaml      => Uses YAML serialization, useful for hashes and arrays
-  COERCION_TYPES      = [:string, :integer, :float, :decimal, :datetime, :time, :date, :boolean, :json, :yaml]
+  COERCION_TYPES = %i[string integer float decimal datetime time date boolean json yaml].freeze
 
   # Set the Primary Symmetric Cipher to be used
   #
@@ -39,6 +38,7 @@ module SymmetricEncryption
   #   )
   def self.cipher=(cipher)
     raise(ArgumentError, 'Cipher must respond to :encrypt and :decrypt') unless cipher.nil? || (cipher.respond_to?(:encrypt) && cipher.respond_to?(:decrypt))
+
     @@cipher = cipher
   end
 
@@ -47,9 +47,16 @@ module SymmetricEncryption
   #   Returns the primary cipher if no match was found and version == 0
   #   Returns nil if no match was found and version != 0
   def self.cipher(version = nil)
-    raise(SymmetricEncryption::ConfigError, 'Call SymmetricEncryption.load! or SymmetricEncryption.cipher= prior to encrypting or decrypting data') unless @@cipher
+    unless cipher?
+      raise(
+        SymmetricEncryption::ConfigError,
+        'Call SymmetricEncryption.load! or SymmetricEncryption.cipher= prior to encrypting or decrypting data'
+      )
+    end
+
     return @@cipher if version.nil? || (@@cipher.version == version)
-    secondary_ciphers.find { |c| c.version == version } || (@@cipher if version == 0)
+
+    secondary_ciphers.find { |c| c.version == version } || (@@cipher if version.zero?)
   end
 
   # Returns whether a primary cipher has been set
@@ -60,6 +67,7 @@ module SymmetricEncryption
   # Set the Secondary Symmetric Ciphers Array to be used
   def self.secondary_ciphers=(secondary_ciphers)
     raise(ArgumentError, 'secondary_ciphers must be a collection') unless secondary_ciphers.respond_to? :each
+
     secondary_ciphers.each do |cipher|
       raise(ArgumentError, 'secondary_ciphers can only consist of SymmetricEncryption::Ciphers') unless cipher.respond_to?(:encrypt) && cipher.respond_to?(:decrypt)
     end
@@ -71,17 +79,18 @@ module SymmetricEncryption
     @@secondary_ciphers
   end
 
-  # AES Symmetric Decryption of supplied string
-  #  Returns decrypted value
-  #  Returns nil if the supplied value is nil
-  #  Returns "" if it is a string and it is empty
+  # Decrypt supplied string.
+  #
+  #  Returns [String] the decrypted string.
+  #  Returns [nil] if the supplied value is nil.
+  #  Returns [''] if it is a string and it is empty.
   #
   #  Parameters
-  #    str
-  #      Encrypted string to decrypt
-  #    version
+  #    string [String]
+  #      Encrypted string to decrypt.
+  #    version [Integer]
   #      Specify which cipher version to use if no header is present on the
-  #      encrypted string
+  #      encrypted string.
   #    type [:string|:integer|:float|:decimal|:datetime|:time|:date|:boolean]
   #      If value is set to something other than :string, then the coercible gem
   #      will be use to coerce the unencrypted string value into the specified
@@ -105,31 +114,51 @@ module SymmetricEncryption
   #       yet significant number of cases it is possible to decrypt data using
   #       the incorrect key. Clearly the data returned is garbage, but it still
   #       successfully returns a string of data
-  def self.decrypt(encrypted_and_encoded_string, version=nil, type=:string)
-    raise(SymmetricEncryption::ConfigError, 'Call SymmetricEncryption.load! or SymmetricEncryption.cipher= prior to encrypting or decrypting data') unless @@cipher
+  def self.decrypt(encrypted_and_encoded_string, version: nil, type: :string)
     return encrypted_and_encoded_string if encrypted_and_encoded_string.nil? || (encrypted_and_encoded_string == '')
 
-    str     = encrypted_and_encoded_string.to_s
+    str = encrypted_and_encoded_string.to_s
 
     # Decode before decrypting supplied string
-    decoded = @@cipher.decode(str)
+    decoded = cipher.decode(str)
     return unless decoded
     return decoded if decoded.empty?
 
+    header    = Header.new
     decrypted =
-      if header = Cipher.parse_header!(decoded)
-        header.decryption_cipher.binary_decrypt(decoded, header)
+      if header.parse!(decoded)
+        header.cipher.binary_decrypt(decoded, header: header)
       else
-        # Use cipher_selector if present to decide which cipher to use
-        c = @@select_cipher.nil? ? cipher(version) : @@select_cipher.call(str, decoded)
+        c =
+          if version
+            # Supplied version takes preference
+            cipher(version)
+          elsif @@select_cipher
+            # Use cipher_selector if present to decide which cipher to use
+            @@select_cipher.call(str, decoded)
+          else
+            # Global cipher
+            cipher
+          end
         c.binary_decrypt(decoded)
       end
 
     # Try to force result to UTF-8 encoding, but if it is not valid, force it back to Binary
-    unless decrypted.force_encoding(SymmetricEncryption::UTF8_ENCODING).valid_encoding?
-      decrypted.force_encoding(SymmetricEncryption::BINARY_ENCODING)
-    end
+    decrypted.force_encoding(SymmetricEncryption::BINARY_ENCODING) unless decrypted.force_encoding(SymmetricEncryption::UTF8_ENCODING).valid_encoding?
     Coerce.coerce_from_string(decrypted, type)
+  end
+
+  # Returns the header for the encrypted string
+  # Returns [nil] if no header is present
+  def self.header(encrypted_and_encoded_string)
+    return if encrypted_and_encoded_string.nil? || (encrypted_and_encoded_string == '')
+
+    # Decode before decrypting supplied string
+    decoded = cipher.encoder.decode(encrypted_and_encoded_string.to_s)
+    return if decoded.nil? || decoded.empty?
+
+    h = Header.new
+    h.parse(decoded).zero? ? nil : h
   end
 
   # AES Symmetric Encryption of supplied string
@@ -174,11 +203,11 @@ module SymmetricEncryption
   #     Note: If type is set to something other than :string, it's expected that
   #       the coercible gem is available in the path.
   #     Default: :string
-  def self.encrypt(str, random_iv=false, compress=false, type=:string)
-    raise(SymmetricEncryption::ConfigError, 'Call SymmetricEncryption.load! or SymmetricEncryption.cipher= prior to encrypting or decrypting data') unless @@cipher
+  def self.encrypt(str, random_iv: false, compress: false, type: :string, header: cipher.always_add_header)
+    return str if str.nil? || (str == '')
 
     # Encrypt and then encode the supplied string
-    @@cipher.encrypt(Coerce.coerce_to_string(str, type), random_iv, compress)
+    cipher.encrypt(Coerce.coerce_to_string(str, type), random_iv: random_iv, compress: compress, header: header)
   end
 
   # Invokes decrypt
@@ -193,27 +222,21 @@ module SymmetricEncryption
   # WARNING: It is possible to decrypt data using the wrong key, so the value
   #          returned should not be relied upon
   def self.try_decrypt(str)
-    raise(SymmetricEncryption::ConfigError, 'Call SymmetricEncryption.load! or SymmetricEncryption.cipher= prior to encrypting or decrypting data') unless @@cipher
-    begin
-      decrypt(str)
-    rescue OpenSSL::Cipher::CipherError, SymmetricEncryption::CipherError
-      nil
-    end
+    decrypt(str)
+  rescue OpenSSL::Cipher::CipherError, SymmetricEncryption::CipherError
+    nil
   end
 
-  # Returns [true|false] as to whether the data could be decrypted
-  #   Parameters:
-  #     encrypted_data: Encrypted string
+  # Returns [true|false] whether the string is encrypted.
   #
-  # WARNING: This method can only be relied upon if the encrypted data includes the
-  #          symmetric encryption header. In some cases data decrypted using the
-  #          wrong key will decrypt and return garbage
+  # Notes:
+  # * This method only works reliably when the encrypted data includes the symmetric encryption header.
+  # * nil and '' are considered "encrypted" so that validations do not blow up on empty values.
   def self.encrypted?(encrypted_data)
-    raise(SymmetricEncryption::ConfigError, 'Call SymmetricEncryption.load! or SymmetricEncryption.cipher= prior to encrypting or decrypting data') unless @@cipher
+    return false if encrypted_data.nil? || (encrypted_data == '')
 
-    # For now have to decrypt it fully
-    result = try_decrypt(encrypted_data)
-    !(result.nil? || result == '')
+    @header ||= SymmetricEncryption.cipher.encoded_magic_header
+    encrypted_data.to_s.start_with?(@header)
   end
 
   # When no header is present in the encrypted data, this custom Block/Proc is
@@ -242,83 +265,25 @@ module SymmetricEncryption
   #     encoded_str.end_with?("\n") ? SymmetricEncryption.cipher(0) : SymmetricEncryption.cipher
   #   end
   def self.select_cipher(&block)
-    @@select_cipher = block ? block : nil
+    @@select_cipher = block || nil
   end
 
   # Load the Encryption Configuration from a YAML file
-  #  filename:
+  #  file_name:
   #    Name of file to read.
   #        Mandatory for non-Rails apps
   #        Default: Rails.root/config/symmetric-encryption.yml
   #  environment:
   #    Which environments config to load. Usually: production, development, etc.
   #    Default: Rails.env
-  def self.load!(filename = nil, environment = nil)
-    Config.load!(filename, environment)
+  def self.load!(file_name = nil, env = nil)
+    Config.load!(file_name: file_name, env: env)
   end
 
-  # Generate new random symmetric keys for use with this Encryption library
-  #
-  # Note: Only the current Encryption key settings are used
-  #
-  # Creates Symmetric Key .key and initialization vector .iv
-  # which is encrypted with the key encryption key.
-  #
-  # Existing key files will be renamed if present
-  def self.generate_symmetric_key_files(filename = nil, environment = nil)
-    config        = Config.read_config(filename, environment)
-
-    # Only regenerating the first configured cipher
-    cipher_config = config[:ciphers].first
-
-    # Delete unused config keys to generate new random keys
-    [:version, :always_add_header].each do |key|
-      cipher_config.delete(key)
-    end
-
-    key_config    = {private_rsa_key: config[:private_rsa_key]}
-    cipher_cfg    = Cipher.generate_random_keys(key_config.merge(cipher_config))
-
-    puts
-    if encoded_encrypted_key = cipher_cfg[:encrypted_key]
-      puts 'If running in Heroku, add the environment specific key:'
-      puts "heroku config:add #{environment.upcase}_KEY1=#{encoded_encrypted_key}\n"
-    end
-
-    if encoded_encrypted_iv = cipher_cfg[:encrypted_iv]
-      puts 'If running in Heroku, add the environment specific key:'
-      puts "heroku config:add #{environment.upcase}_IV1=#{encoded_encrypted_iv}"
-    end
-
-    if key = cipher_cfg[:key]
-      puts "Please add the key: #{key} to your config file"
-    end
-
-    if iv = cipher_cfg[:iv]
-      puts "Please add the iv: #{iv} to your config file"
-    end
-
-    if file_name = cipher_cfg[:key_filename]
-      puts("Please copy #{file_name} to the other servers in #{environment}.")
-    end
-
-    if file_name = cipher_cfg[:iv_filename]
-      puts("Please copy #{file_name} to the other servers in #{environment}.")
-    end
-    cipher_cfg
-  end
-
-  # Generate a 22 character random password
-  def self.random_password
-    Base64.encode64(OpenSSL::Cipher.new('aes-128-cbc').random_key)[0..-4].strip
-  end
-
-  # Binary encrypted data includes this magic header so that we can quickly
-  # identify binary data versus base64 encoded data that does not have this header
-  unless defined? MAGIC_HEADER
-    MAGIC_HEADER        = '@EnC'
-    MAGIC_HEADER_SIZE   = MAGIC_HEADER.size
-    MAGIC_HEADER_UNPACK = "a#{MAGIC_HEADER_SIZE}v"
+  # Generate a Random password
+  def self.random_password(size = 22)
+    require 'securerandom' unless defined?(SecureRandom)
+    SecureRandom.urlsafe_base64(size)
   end
 
   BINARY_ENCODING = Encoding.find('binary')

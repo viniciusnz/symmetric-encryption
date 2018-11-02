@@ -9,12 +9,12 @@ module SymmetricEncryption
       datetime: DateTime,
       time:     Time,
       date:     Date
-    }
+    }.freeze
 
     # Coerce given value into given type
     # Does not coerce json or yaml values
-    def self.coerce(value, type, from_type=nil)
-      return if blank?(value)
+    def self.coerce(value, type, from_type = nil)
+      return value if value.nil? || (value == '')
 
       from_type ||= value.class
       case type
@@ -32,7 +32,8 @@ module SymmetricEncryption
     # Note: if the type is :string, then the value is returned as is, and the
     #   coercible gem is not used at all.
     def self.coerce_from_string(value, type)
-      return if value.nil?
+      return value if value.nil? || (value == '')
+
       case type
       when :string
         value
@@ -41,7 +42,7 @@ module SymmetricEncryption
       when :yaml
         YAML.load(value)
       else
-        self.coerce(value, type, String)
+        coerce(value, type, String)
       end
     end
 
@@ -49,7 +50,7 @@ module SymmetricEncryption
     # Note: if the type is :string, and value is not nil, then #to_s is called
     #   on the value and the coercible gem is not used at all.
     def self.coerce_to_string(value, type)
-      return if value.nil?
+      return value if value.nil? || (value == '')
 
       case type
       when :string
@@ -59,7 +60,7 @@ module SymmetricEncryption
       when :yaml
         value.to_yaml
       else
-        self.coerce(value, :string, coercion_type(type, value))
+        coerce(value, :string, coercion_type(type, value))
       end
     end
 
@@ -69,23 +70,6 @@ module SymmetricEncryption
         value.class
       else
         TYPE_MAP[symbol]
-      end
-    end
-
-    private
-
-    BLANK_RE = /\A[[:space:]]*\z/
-
-    # Returns [true|false] whether the supplied value is blank?
-    def self.blank?(value)
-      return true if value.nil?
-      if value.is_a?(String)
-        return true if value.empty?
-        # When Binary data is supplied that cannot convert to UTF-8 it is clearly not blank
-        return false unless value.dup.force_encoding(SymmetricEncryption::UTF8_ENCODING).valid_encoding?
-        (value =~ BLANK_RE) == 0
-      else
-        false
       end
     end
   end

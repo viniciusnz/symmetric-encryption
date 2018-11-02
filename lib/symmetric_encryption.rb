@@ -8,29 +8,54 @@ require 'symmetric_encryption/cipher'
 require 'symmetric_encryption/symmetric_encryption'
 require 'symmetric_encryption/exception'
 
-#@formatter:off
+# @formatter:off
 module SymmetricEncryption
   autoload :Coerce,                 'symmetric_encryption/coerce'
   autoload :Config,                 'symmetric_encryption/config'
   autoload :Encoder,                'symmetric_encryption/encoder'
-  autoload :KeyEncryptionKey,       'symmetric_encryption/key_encryption_key'
-  autoload :Reader,                 'symmetric_encryption/reader'
-  autoload :Writer,                 'symmetric_encryption/writer'
   autoload :Generator,              'symmetric_encryption/generator'
+  autoload :Header,                 'symmetric_encryption/header'
+  autoload :Key,                    'symmetric_encryption/key'
+  autoload :Reader,                 'symmetric_encryption/reader'
+  autoload :RSAKey,                 'symmetric_encryption/rsa_key'
+  autoload :Writer,                 'symmetric_encryption/writer'
+  autoload :CLI,                    'symmetric_encryption/cli'
+  autoload :Keystore,               'symmetric_encryption/keystore'
   module Utils
-    autoload :ReEncryptConfigFiles, 'symmetric_encryption/re_encrypt_config_files'
+    autoload :Aws,                  'symmetric_encryption/utils/aws'
+    autoload :ReEncryptFiles,       'symmetric_encryption/utils/re_encrypt_files'
   end
 end
-#@formatter:on
+# @formatter:on
 
-# Add support for other libraries only if they have already been loaded
-require 'symmetric_encryption/railtie' if defined?(Rails)
-# if defined?(ActiveRecord::Base) && !defined?(AttrEncrypted::Version)
+# Add extensions. Gems are no longer order dependent.
+begin
+  require 'rails'
+  require 'symmetric_encryption/railtie'
+rescue LoadError
+end
+
+# begin
+#   require 'active_record'
 #   require 'symmetric_encryption/extensions/active_record/base'
+# rescue LoadError
 # end
-require 'symmetric_encryption/railties/symmetric_encryption_validator' if defined?(ActiveModel)
-# require 'symmetric_encryption/extensions/mongoid/encrypted' if defined?(Mongoid)
-# if defined?(MongoMapper)
-#   warn 'MongoMapper support is deprecated. Consider upgrading to Mongoid.'
+# 
+# begin
+#   require 'active_model'
+#   require 'symmetric_encryption/railties/symmetric_encryption_validator'
+# rescue LoadError
+# end
+# 
+# begin
+#   require 'mongoid'
+#   require 'symmetric_encryption/extensions/mongoid/encrypted'
+# rescue LoadError
+# end
+# 
+# begin
+#   require 'mongo_mapper'
+#   warn 'MongoMapper support is deprecated. Please upgrade to Mongoid.'
 #   require 'symmetric_encryption/extensions/mongo_mapper/plugins/encrypted_key'
+# rescue LoadError
 # end
