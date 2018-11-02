@@ -7,9 +7,13 @@ class SymmetricEncryptionTest < Minitest::Test
 
     describe 'configuration' do
       before do
-        config                             = SymmetricEncryption::Config.read_config(File.join(File.dirname(__FILE__), 'config', 'symmetric-encryption.yml'), 'test')
-        @ciphers                           = SymmetricEncryption::Config.extract_ciphers(config)
-        @cipher_v2, @cipher_v1, @cipher_v0 = @ciphers
+        config   = SymmetricEncryption::Config.new(
+          file_name: File.join(File.dirname(__FILE__), 'config', 'symmetric-encryption.yml'),
+          env:       'test'
+        )
+        @ciphers = config.ciphers
+
+        @cipher_v2, @cipher_v6, @cipher_v1, @cipher_v0 = @ciphers
       end
 
       it 'matches config file for first cipher' do
@@ -105,8 +109,13 @@ class SymmetricEncryptionTest < Minitest::Test
         end
 
         it 'determine if string is encrypted' do
-          assert_equal true, SymmetricEncryption.encrypted?(@social_security_number_encrypted)
-          assert_equal false, SymmetricEncryption.encrypted?(@social_security_number)
+          if encoding == :base64strict || encoding == :base64
+            assert SymmetricEncryption.encrypted?(@social_security_number_encrypted)
+            refute SymmetricEncryption.encrypted?(@social_security_number)
+
+            # Without a header it can only assume it is not encrypted
+            refute SymmetricEncryption.encrypted?(SymmetricEncryption.encrypt(@social_security_number, header: false))
+          end
         end
       end
     end
@@ -115,7 +124,7 @@ class SymmetricEncryptionTest < Minitest::Test
       before do
         @social_security_number = '987654321'
         # Encrypt data without a header and encode with base64 which has a trailing '\n'
-        @encrypted_0_ssn        = SymmetricEncryption.cipher(0).encode(SymmetricEncryption.cipher(0).binary_encrypt(@social_security_number, false, false, false))
+        @encrypted_0_ssn = SymmetricEncryption.cipher(0).encode(SymmetricEncryption.cipher(0).binary_encrypt(@social_security_number, header: false))
 
         SymmetricEncryption.select_cipher do |encoded_str, decoded_str|
           # Use cipher version 0 if the encoded string ends with "\n" otherwise
@@ -138,7 +147,7 @@ class SymmetricEncryptionTest < Minitest::Test
       before do
         @social_security_number = '987654321'
         # Encrypt data without a header and encode with base64 which has a trailing '\n'
-        assert @encrypted_0_ssn = SymmetricEncryption.cipher(0).encode(SymmetricEncryption.cipher(0).binary_encrypt(@social_security_number, false, false, false))
+        assert @encrypted_0_ssn = SymmetricEncryption.cipher(0).encode(SymmetricEncryption.cipher(0).binary_encrypt(@social_security_number, header: false))
       end
 
       it 'decrypt string without a header using an old cipher' do
@@ -155,15 +164,19 @@ class SymmetricEncryptionTest < Minitest::Test
 
       it 'encrypt and then decrypt using random iv' do
         # Encrypt with random iv
-        assert encrypted = SymmetricEncryption.encrypt(@social_security_number, true)
-        assert_equal true, SymmetricEncryption.encrypted?(encrypted)
+        assert encrypted = SymmetricEncryption.encrypt(@social_security_number, random_iv: true)
+        assert_equal @social_security_number, SymmetricEncryption.decrypt(encrypted)
+      end
+
+      it 'encrypt and then decrypt using random iv with higher version' do
+        # Encrypt with random iv
+        assert encrypted = SymmetricEncryption.cipher(6).encrypt(@social_security_number, random_iv: true)
         assert_equal @social_security_number, SymmetricEncryption.decrypt(encrypted)
       end
 
       it 'encrypt and then decrypt using random iv with compression' do
         # Encrypt with random iv and compress
-        assert encrypted = SymmetricEncryption.encrypt(@social_security_number, true, true)
-        assert_equal true, SymmetricEncryption.encrypted?(encrypted)
+        assert encrypted = SymmetricEncryption.encrypt(@social_security_number, random_iv: true, compress: true)
         assert_equal @social_security_number, SymmetricEncryption.decrypt(encrypted)
       end
     end
@@ -175,144 +188,53 @@ class SymmetricEncryptionTest < Minitest::Test
         end
 
         it 'encrypt and decrypt value to and from a string' do
-          assert encrypted = SymmetricEncryption.encrypt(@social_security_number, false, false, :string)
-          assert_equal true, SymmetricEncryption.encrypted?(encrypted)
-          assert_equal @social_security_number, SymmetricEncryption.decrypt(encrypted, nil, :string)
+          assert encrypted = SymmetricEncryption.encrypt(@social_security_number, type: :string)
+          assert_equal @social_security_number, SymmetricEncryption.decrypt(encrypted, type: :string)
+        end
+
+        it 'retains empty' do
+          encrypted = SymmetricEncryption.encrypt('', type: :string)
+          assert_equal '', encrypted
+          assert_equal '', SymmetricEncryption.decrypt(encrypted, type: :string)
+        end
+
+        it 'retains nil' do
+          assert_nil encrypted = SymmetricEncryption.encrypt(nil, type: :string)
+          assert_nil SymmetricEncryption.decrypt(encrypted, type: :string)
         end
       end
 
-      describe 'integer' do
-        before do
-          @age = 21
-        end
-
-        it 'encrypt and decrypt value to and from an integer' do
-          assert encrypted = SymmetricEncryption.encrypt(@age, false, false, :integer)
-          assert_equal true, SymmetricEncryption.encrypted?(encrypted)
-          assert_equal @age, SymmetricEncryption.decrypt(encrypted, nil, :integer)
-        end
-      end
-
-      describe 'float' do
-        before do
-          @miles = 2.5
-        end
-
-        it 'encrypt and decrypt value to and from a float' do
-          assert encrypted = SymmetricEncryption.encrypt(@miles, false, false, :float)
-          assert_equal true, SymmetricEncryption.encrypted?(encrypted)
-          assert_equal @miles, SymmetricEncryption.decrypt(encrypted, nil, :float)
-        end
-      end
-
-      describe 'decimal' do
-        before do
-          @account_balance = BigDecimal.new('12.58')
-        end
-
-        it 'encrypt and decrypt value to and from a BigDecimal' do
-          assert encrypted = SymmetricEncryption.encrypt(@account_balance, false, false, :decimal)
-          assert_equal true, SymmetricEncryption.encrypted?(encrypted)
-          assert_equal @account_balance, SymmetricEncryption.decrypt(encrypted, nil, :decimal)
-        end
-      end
-
-      describe 'datetime' do
-        before do
-          @checked_in_at = DateTime.new(2001, 11, 26, 20, 55, 54, "-5")
-        end
-
-        it 'encrypt and decrypt value to and from a DateTime' do
-          assert encrypted = SymmetricEncryption.encrypt(@checked_in_at, false, false, :datetime)
-          assert_equal true, SymmetricEncryption.encrypted?(encrypted)
-          assert_equal @checked_in_at, SymmetricEncryption.decrypt(encrypted, nil, :datetime)
-        end
-      end
-
-      describe 'time' do
-        before do
-          @closing_time = Time.new(2013, 01, 01, 22, 30, 00, "-04:00")
-        end
-
-        it 'encrypt and decrypt value to and from a Time' do
-          assert encrypted = SymmetricEncryption.encrypt(@closing_time, false, false, :time)
-          assert_equal true, SymmetricEncryption.encrypted?(encrypted)
-          assert_equal @closing_time, SymmetricEncryption.decrypt(encrypted, nil, :time)
-        end
-      end
-
-      describe 'date' do
-        before do
-          @birthdate = Date.new(1927, 04, 01)
-        end
-
-        it 'encrypt and decrypt value to and from a Date' do
-          assert encrypted = SymmetricEncryption.encrypt(@birthdate, false, false, :date)
-          assert_equal true, SymmetricEncryption.encrypted?(encrypted)
-          assert_equal @birthdate, SymmetricEncryption.decrypt(encrypted, nil, :date)
-        end
-      end
-
-      describe 'boolean' do
-        describe 'when true' do
-          before do
-            @is_working = true
+      {
+        integer:  21,
+        float:    2.5,
+        decimal:  BigDecimal.new('12.58'),
+        datetime: DateTime.new(2001, 11, 26, 20, 55, 54, "-5"),
+        time:     Time.new(2013, 01, 01, 22, 30, 00, "-04:00"),
+        date:     Date.new(1927, 04, 01),
+        boolean:  true,
+        yaml:     {:a => :b},
+        json:     {'a' => 'b'}
+      }.each_pair do |type, value|
+        describe type.to_s do
+          it 'encrypt and decrypt' do
+            assert encrypted = SymmetricEncryption.encrypt(value, type: type)
+            assert_equal value, SymmetricEncryption.decrypt(encrypted, type: type)
           end
 
-          it 'encrypt and decrypt a true value to and from a boolean' do
-            assert encrypted = SymmetricEncryption.encrypt(@is_working, false, false, :boolean)
-            assert_equal true, SymmetricEncryption.encrypted?(encrypted)
-            assert_equal @is_working, SymmetricEncryption.decrypt(encrypted, nil, :boolean)
-          end
-        end
-
-        describe 'when false' do
-          before do
-            @is_broken = false
-          end
-
-          it 'encrypt and decrypt a false value to and from a boolean' do
-            assert encrypted = SymmetricEncryption.encrypt(@is_broken, false, false, :boolean)
-            assert_equal true, SymmetricEncryption.encrypted?(encrypted)
-            assert_equal @is_broken, SymmetricEncryption.decrypt(encrypted, nil, :boolean)
-          end
-        end
-
-        describe 'when yaml' do
-          before do
-            @test = {:a => :b}
-          end
-
-          it 'encrypt and decrypt a false value to and from a boolean' do
-            assert encrypted = SymmetricEncryption.encrypt(@test, false, false, :yaml)
-            assert_equal true, SymmetricEncryption.encrypted?(encrypted)
-            assert_equal @test, SymmetricEncryption.decrypt(encrypted, nil, :yaml)
-          end
-        end
-
-      end
-    end
-
-    describe '.generate_symmetric_key_files' do
-      let(:params) { {private_rsa_key: 'rsa_key', key: 'key', iv: 'iv'} }
-      let(:file_path) { File.join(File.dirname(__FILE__), 'config', 'symmetric-encryption.yml') }
-      let(:cipher_config) { {encrypted_key: 'encrypted_key', encrypted_iv: 'encrypted_iv'} }
-
-      let(:config) do
-        {
-          private_rsa_key: 'rsa_key',
-          ciphers:         [{version: 1, always_add_header: true, key: 'key', iv: 'iv'}]
-        }
-      end
-
-      it 'removes unused config keys before generate the random keys' do
-        SymmetricEncryption::Config.stub(:read_config, config) do
-          SymmetricEncryption::Cipher.stub(:generate_random_keys, cipher_config) do
-            SymmetricEncryption.generate_symmetric_key_files(file_path, 'test')
+          it 'retains nil' do
+            assert_nil encrypted = SymmetricEncryption.encrypt(nil, type: type)
+            assert_nil SymmetricEncryption.decrypt(encrypted, type: type)
           end
         end
       end
+
+      describe 'boolean false' do
+        it 'encrypt and decrypt' do
+          assert encrypted = SymmetricEncryption.encrypt(false, type: :boolean)
+          assert_equal false, SymmetricEncryption.decrypt(encrypted, type: :boolean)
+        end
+      end
+
     end
   end
-
 end

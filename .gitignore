@@ -8,3 +8,6 @@ Gemfile.lock
 *.lock
 .idea
 /docs/_site
+.ruby-gemset
+
+tmp/*

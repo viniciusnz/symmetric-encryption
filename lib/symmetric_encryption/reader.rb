@@ -10,32 +10,15 @@ module SymmetricEncryption
     # Open a file for reading, or use the supplied IO Stream
     #
     # Parameters:
-    #   filename_or_stream:
-    #     The filename to open if a string, otherwise the stream to use
+    #   file_name_or_stream:
+    #     The file_name to open if a string, otherwise the stream to use
     #     The file or stream will be closed on completion, use .initialize to
     #     avoid having the stream closed automatically
     #
-    #   options:
-    #     :mode
-    #          See File.open for open modes
-    #          Default: 'rb'
-    #
-    #     :buffer_size
-    #          Amount of data to read at a time
-    #          Minimum Value 128
-    #          Default: 4096
-    #
-    #   The following options are only used if the stream/file has no header
-    #     :compress [true|false]
-    #          Uses Zlib to decompress the data after it is decrypted
-    #          Note: This option is only used if the file does not have a header
-    #                indicating whether it is compressed
-    #          Default: false
-    #
-    #     :version
-    #          Version of the encryption key to use when decrypting and the
-    #          file/stream does not include a header at the beginning
-    #          Default: Current primary key
+    #   buffer_size:
+    #     Amount of data to read at a time.
+    #     Minimum Value 128
+    #     Default: 16384
     #
     # Note: Decryption occurs before decompression
     #
@@ -76,30 +59,66 @@ module SymmetricEncryption
     # ensure
     #   csv.close if csv
     # end
-    def self.open(filename_or_stream, options={}, &block)
-      raise(ArgumentError, 'options must be a hash') unless options.respond_to?(:each_pair)
-      mode     = options.fetch(:mode, 'rb')
-      compress = options.fetch(:compress, false)
-      ios      = filename_or_stream.is_a?(String) ? ::File.open(filename_or_stream, mode) : filename_or_stream
+    def self.open(file_name_or_stream, buffer_size: 16384, **args, &block)
+      ios = file_name_or_stream.is_a?(String) ? ::File.open(file_name_or_stream, 'rb') : file_name_or_stream
 
       begin
-        file = self.new(ios, options)
-        file = Zlib::GzipReader.new(file) if !file.eof? && (file.compressed? || compress)
+        file = self.new(ios, buffer_size: buffer_size, **args)
+        file = Zlib::GzipReader.new(file) if !file.eof? && file.compressed?
         block ? block.call(file) : file
       ensure
         file.close if block && file && (file.respond_to?(:closed?) && !file.closed?)
       end
     end
 
+    # Read the entire contents of a file or stream into memory.
+    #
+    # Notes:
+    # * Do not use this method for reading large files.
+    def self.read(file_name_or_stream, **args)
+      open(file_name_or_stream, **args) { |f| f.read }
+    end
+
+    # Decrypt an entire file.
+    #
+    # Returns [Integer] the number of unencrypted bytes written to the target file.
+    #
+    # Params:
+    #   source: [String|IO]
+    #     Source file_name or IOStream
+    #
+    #   target: [String|IO]
+    #     Target file_name or IOStream
+    #
+    #   block_size: [Integer]
+    #     Number of bytes to read into memory for each read.
+    #     For very large files using a larger block size is faster.
+    #     Default: 65535
+    #
+    # Notes:
+    # * The file contents are streamed so that the entire file is _not_ loaded into memory.
+    def self.decrypt(source:, target:, block_size: 65535, **args)
+      target_ios    = target.is_a?(String) ? ::File.open(target, 'wb') : target
+      bytes_written = 0
+      open(source, **args) do |input_ios|
+        while !input_ios.eof?
+          bytes_written += target_ios.write(input_ios.read(block_size))
+        end
+      end
+      bytes_written
+    ensure
+      target_ios.close if target_ios && target_ios.respond_to?(:closed?) && !target_ios.closed?
+    end
+
     # Returns [true|false] whether the file or stream contains any data
     # excluding the header should it have one
-    def self.empty?(filename_or_stream)
-      open(filename_or_stream) { |file| file.eof? }
+    def self.empty?(file_name_or_stream)
+      open(file_name_or_stream) { |file| file.eof? }
     end
 
     # Returns [true|false] whether the file contains the encryption header
-    def self.header_present?(filename)
-      ::File.open(filename, 'rb') { |file| new(file).header_present? }
+    def self.header_present?(file_name)
+      ::File.open(file_name, 'rb') { |file| new(file).header_present? }
     end
 
     # After opening a file Returns [true|false] whether the file being
@@ -109,10 +128,10 @@ module SymmetricEncryption
     end
 
     # Decrypt data before reading from the supplied stream
-    def initialize(ios, options={})
+    def initialize(ios, buffer_size: 4096, version: nil)
       @ios            = ios
-      @buffer_size    = options.fetch(:buffer_size, 4096).to_i
-      @version        = options[:version]
+      @buffer_size    = buffer_size
+      @version        = version
       @header_present = false
       @closed         = false
 
@@ -316,33 +335,33 @@ module SymmetricEncryption
 
     # Read the header from the file if present
     def read_header
-      @pos              = 0
+      @pos = 0
 
       # Read first block and check for the header
-      buf               = @ios.read(@buffer_size)
+      buf = @ios.read(@buffer_size)
 
       # Use cipher specified in header, or global cipher if it has no header
-      iv, key           = nil
-      cipher_name       = nil
-      decryption_cipher = nil
-      if header = SymmetricEncryption::Cipher.parse_header!(buf)
-        @header_present   = true
-        @compressed       = header.compressed
-        decryption_cipher = header.decryption_cipher
-        cipher_name       = header.cipher_name || decryption_cipher.cipher_name
-        key               = header.key
-        iv                = header.iv
+      iv, key, cipher_name, cipher = nil
+      header                       = Header.new
+      if header.parse!(buf)
+        @header_present = true
+        @compressed     = header.compressed?
+        @version        = header.version
+        cipher          = header.cipher
+        cipher_name     = header.cipher_name || cipher.cipher_name
+        key             = header.key
+        iv              = header.iv
       else
-        @header_present   = false
-        @compressed       = nil
-        decryption_cipher = SymmetricEncryption.cipher(@version)
-        cipher_name       = decryption_cipher.cipher_name
+        @header_present = false
+        @compressed     = nil
+        cipher          = SymmetricEncryption.cipher(@version)
+        cipher_name     = cipher.cipher_name
       end
 
       @stream_cipher = ::OpenSSL::Cipher.new(cipher_name)
       @stream_cipher.decrypt
-      @stream_cipher.key = key || decryption_cipher.send(:key)
-      @stream_cipher.iv  = iv || decryption_cipher.iv
+      @stream_cipher.key = key || cipher.send(:key)
+      @stream_cipher.iv  = iv || cipher.iv
 
       # First call to #update should return an empty string anyway
       if buf && buf.length > 0

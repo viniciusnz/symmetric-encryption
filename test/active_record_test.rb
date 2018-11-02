@@ -77,15 +77,6 @@ class UniqueUser < ActiveRecord::Base
 end
 #@formatter:on
 
-# Initialize the database connection
-config_file = File.join(File.dirname(__FILE__), 'config', 'database.yml')
-raise 'database config not found. Create a config file at: test/config/database.yml' unless File.exist? config_file
-
-cfg = YAML.load(ERB.new(File.new(config_file).read).result)['test']
-raise("Environment 'test' not defined in test/config/database.yml") unless cfg
-
-User.establish_connection(cfg)
-
 #
 # Unit Test for attr_encrypted extensions in ActiveRecord
 #
@@ -114,26 +105,26 @@ class ActiveRecordTest < Minitest::Test
 
       @user = User.new(
         # Encrypted Attribute
-        bank_account_number:    @bank_account_number,
+        bank_account_number: @bank_account_number,
         # Encrypted Attribute
         social_security_number: @social_security_number,
         name:                   @name,
         # data type specific fields
-        string_value:           STRING_VALUE,
-        long_string_value:      LONG_STRING_VALUE,
-        binary_string_value:    BINARY_STRING_VALUE,
-        integer_value:          INTEGER_VALUE,
-        float_value:            FLOAT_VALUE,
-        decimal_value:          DECIMAL_VALUE,
-        datetime_value:         DATETIME_VALUE,
-        time_value:             TIME_VALUE,
-        date_value:             DATE_VALUE,
-        true_value:             true,
-        false_value:            false,
-        data_yaml:              @h.dup,
-        data_json:              @h.dup,
-        text:                   'hello',
-        number:                 '21'
+        string_value:        STRING_VALUE,
+        long_string_value:   LONG_STRING_VALUE,
+        binary_string_value: BINARY_STRING_VALUE,
+        integer_value:       INTEGER_VALUE,
+        float_value:         FLOAT_VALUE,
+        decimal_value:       DECIMAL_VALUE,
+        datetime_value:      DATETIME_VALUE,
+        time_value:          TIME_VALUE,
+        date_value:          DATE_VALUE,
+        true_value:          true,
+        false_value:         false,
+        data_yaml:           @h.dup,
+        data_json:           @h.dup,
+        text:                'hello',
+        number:              '21'
       )
     end
 
@@ -171,9 +162,9 @@ class ActiveRecordTest < Minitest::Test
       it 'true' do
         @user.string_value = STRING_VALUE
         assert first_value = @user.encrypted_string_value
-        # Assign the same value
-        @user.string_value = STRING_VALUE.dup
-        assert first_value != @user.encrypted_string_value
+        @user.string_value = 'blah'
+        @user.string_value = STRING_VALUE
+        refute_equal first_value, @user.encrypted_string_value
       end
 
       it 'true and compress: true' do
@@ -182,9 +173,48 @@ class ActiveRecordTest < Minitest::Test
 
         refute_equal @user.encrypted_long_string_value, @user.encrypted_string_value
       end
+
+      describe 'changed?' do
+        it 'true for a new instance' do
+          assert @user.string_value_changed?
+        end
+
+        it 'clears after save' do
+          @user.save!
+          refute @user.string_value_changed?
+        end
+
+        it 'does not change when equal' do
+          @user.save!
+          before             = @user.encrypted_string_value
+          @user.string_value = STRING_VALUE
+          refute @user.string_value_changed?
+          assert_equal before, @user.encrypted_string_value
+        end
+      end
     end
 
     describe 'attribute=' do
+      it 'handles nil' do
+        @user.string_value = nil
+        assert_nil @user.string_value
+        assert_nil @user.encrypted_string_value
+        @user.save!
+        @user.reload
+        assert_nil @user.string_value
+        assert_nil @user.encrypted_string_value
+      end
+
+      it 'handles empty string' do
+        @user.string_value = ''
+        assert_equal '', @user.string_value
+        assert_equal '', @user.encrypted_string_value
+        @user.save!
+        @user.reload
+        assert_equal '', @user.string_value
+        assert_equal '', @user.encrypted_string_value
+      end
+
       it 'encrypt' do
         user                     = User.new
         user.bank_account_number = @bank_account_number
@@ -290,7 +320,7 @@ class ActiveRecordTest < Minitest::Test
         assert @user.valid?
         @user.number = ''
         assert_equal false, @user.valid?
-        assert_nil @user.number
+        assert_equal '', @user.number
         assert_equal ["can't be blank"], @user.errors[:number]
         @user.number = nil
         assert_nil @user.number
@@ -413,17 +443,8 @@ class ActiveRecordTest < Minitest::Test
               @user_clone.save!
 
               @user.reload
-              assert_nil @user.send(@attribute)
-              assert_nil @user.send("encrypted_#{@attribute}".to_sym)
-            end
-
-            it 'permit replacing value with a blank string' do
-              @user_clone.send("#{@attribute}=".to_sym, '    ')
-              @user_clone.save!
-
-              @user.reload
-              assert_nil @user.send(@attribute)
-              assert_nil @user.send("encrypted_#{@attribute}".to_sym)
+              assert_equal '', @user.send(@attribute)
+              assert_equal '', @user.send("encrypted_#{@attribute}".to_sym)
             end
 
             it 'permit replacing value' do
